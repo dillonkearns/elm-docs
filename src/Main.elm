@@ -16,6 +16,7 @@ import Json.Encode as Encode
 import Page.Diff as Diff
 import Page.Docs as Docs
 import Page.Problem as Problem
+import Page.Repl as Repl
 import Page.Search as Search
 import Ports
 import Session
@@ -57,6 +58,7 @@ type Page
     | Search Search.Model
     | Docs Docs.Model
     | Diff Diff.Model
+    | Repl Repl.Model
 
 
 
@@ -99,6 +101,9 @@ view model =
         Diff diff ->
             Skeleton.view never (Diff.view diff)
 
+        Repl repl ->
+            Skeleton.view ReplMsg (Repl.view repl)
+
 
 
 -- INIT
@@ -123,6 +128,7 @@ type Msg
     | SearchMsg Search.Msg
     | DiffMsg Diff.Msg
     | DocsMsg Docs.Msg
+    | ReplMsg Repl.Msg
     | OnReadme Ports.Readme
     | OnDocs Ports.Docs
     | OnManifest Ports.Manifest
@@ -165,6 +171,14 @@ update message model =
             case model.page of
                 Docs docs ->
                     stepDocs model (Docs.update msg docs)
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ReplMsg msg ->
+            case model.page of
+                Repl repl ->
+                    stepRepl model (Repl.update msg repl)
 
                 _ ->
                     ( model, Cmd.none )
@@ -215,6 +229,13 @@ stepDiff : Model -> ( Diff.Model, Cmd Diff.Msg ) -> ( Model, Cmd Msg )
 stepDiff model ( diff, cmds ) =
     ( { model | page = Diff diff }
     , Cmd.map DiffMsg cmds
+    )
+
+
+stepRepl : Model -> ( Repl.Model, Cmd Repl.Msg ) -> ( Model, Cmd Msg )
+stepRepl model ( repl, cmds ) =
+    ( { model | page = Repl repl }
+    , Cmd.map ReplMsg cmds
     )
 
 
@@ -354,6 +375,9 @@ setPageSession session page =
         Docs m ->
             Docs { m | session = session }
 
+        Repl m ->
+            Repl { m | session = session }
+
 
 
 -- EXIT
@@ -374,6 +398,9 @@ exit model =
         Diff m ->
             m.session
 
+        Repl m ->
+            m.session
+
 
 
 -- ROUTER
@@ -387,7 +414,9 @@ stepUrl url model =
 
         parser =
             oneOf
-                [ route top
+                [ route (s "repl")
+                    (stepRepl model (Repl.init session))
+                , route top
                     (stepSearch model (Search.init session))
                 , route (s "packages" </> author_ </> project_)
                     (\author project ->
