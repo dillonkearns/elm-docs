@@ -301,7 +301,7 @@ toLinkLine typeNameDict qualifiedName =
                     span [ title qualifiedName ] [ text typeName ]
 
                 Just info ->
-                    makeLink info [] typeName typeName
+                    makeLink info [ title qualifiedName ] typeName typeName
     in
     One (String.length typeName) [ textElement ]
 
