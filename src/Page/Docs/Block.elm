@@ -206,20 +206,28 @@ type alias Info =
 
 
 type alias TypeNameDict =
-    Dict.Dict String ( String, String )
+    Dict.Dict
+        String
+        { author : String
+        , project : String
+        , version : Maybe V.Version
+        , ref : Maybe String
+        , moduleName : String
+        }
+
+
+type alias ProjectInfo =
+    { author : String
+    , project : String
+    , version : Maybe V.Version
+    , ref : Maybe String
+    }
 
 
 {-| -}
-makeInfo : String -> String -> Maybe V.Version -> Maybe String -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
-makeInfo author project version ref moduleName docsList maybeDiff diffMode =
+makeInfo : String -> String -> Maybe V.Version -> Maybe String -> String -> List ( ProjectInfo, List Docs.Module ) -> Maybe ApiDiff -> Bool -> Info
+makeInfo author project version ref moduleName projectModuleDocs maybeDiff diffMode =
     let
-        addType home { name } docs =
-            Dict.insert (home ++ "." ++ name) ( home, name ) docs
-
-        addModule docs dict =
-            List.foldl (addType docs.name) dict docs.unions
-                |> (\dict_ -> List.foldl (addType docs.name) dict_ docs.aliases)
-
         statusFn =
             case ( diffMode, maybeDiff ) of
                 ( True, Just diff ) ->
@@ -228,9 +236,29 @@ makeInfo author project version ref moduleName docsList maybeDiff diffMode =
                 _ ->
                     \_ -> Unchanged
     in
-    Info author project version ref moduleName
-        (List.foldl addModule Dict.empty docsList)
+    Info author
+        project
+        version
+        ref
+        moduleName
+        (List.foldl addToTypeNameDict Dict.empty projectModuleDocs)
         statusFn
+
+
+addToTypeNameDict : ( ProjectInfo, List Docs.Module ) -> TypeNameDict -> TypeNameDict
+addToTypeNameDict ( { author, project, version, ref }, docsList ) typeNameDict =
+    let
+        addType moduleName { name } docs =
+            Dict.insert
+                (moduleName ++ "." ++ name)
+                { author = author, project = project, version = version, ref = ref, moduleName = moduleName }
+                docs
+
+        addModule docs dict =
+            List.foldl (addType docs.name) dict docs.unions
+                |> (\dict_ -> List.foldl (addType docs.name) dict_ docs.aliases)
+    in
+    List.foldl addModule typeNameDict docsList
 
 
 
@@ -247,7 +275,7 @@ bold =
     style "font-weight" "bold"
 
 
-makeLink : Info -> List (Attribute msg) -> String -> String -> Html msg
+makeLink : { info | author : String, project : String, version : Maybe V.Version, ref : Maybe String, moduleName : String } -> List (Attribute msg) -> String -> String -> Html msg
 makeLink { author, project, version, ref, moduleName } attrs tagName humanName =
     let
         url =
@@ -261,18 +289,21 @@ makeLink { author, project, version, ref, moduleName } attrs tagName humanName =
     a (href url :: attrs) [ text humanName ]
 
 
-toLinkLine : Info -> String -> Lines (Line msg)
-toLinkLine info qualifiedName =
-    case Dict.get qualifiedName info.typeNameDict of
-        Nothing ->
-            let
-                shortName =
-                    last qualifiedName (String.split "." qualifiedName)
-            in
-            One (String.length shortName) [ span [ title qualifiedName ] [ text shortName ] ]
+toLinkLine : TypeNameDict -> String -> Lines (Line msg)
+toLinkLine typeNameDict qualifiedName =
+    let
+        typeName =
+            last qualifiedName (String.split "." qualifiedName)
 
-        Just ( moduleName, name ) ->
-            One (String.length name) [ makeLink { info | moduleName = moduleName } [] name name ]
+        textElement =
+            case Dict.get qualifiedName typeNameDict of
+                Nothing ->
+                    span [ title qualifiedName ] [ text typeName ]
+
+                Just info ->
+                    makeLink info [] typeName typeName
+    in
+    One (String.length typeName) [ textElement ]
 
 
 last : a -> List a -> a
@@ -342,7 +373,7 @@ toLines info context prefixWidth tipe =
             toLinesHelp
                 (typeOne needsParens)
                 (typeMore needsParens)
-                (toLinkLine info name)
+                (toLinkLine info.typeNameDict name)
                 (List.map (toLines info App 0) args)
 
         Type.Record [] Nothing ->
