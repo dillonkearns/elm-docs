@@ -213,11 +213,12 @@ type alias TypeNameDict =
 makeInfo : String -> String -> Maybe V.Version -> Maybe String -> String -> List Docs.Module -> Maybe ApiDiff -> Bool -> Info
 makeInfo author project version ref moduleName docsList maybeDiff diffMode =
     let
-        addUnion home union docs =
-            Dict.insert (home ++ "." ++ union.name) ( home, union.name ) docs
+        addType home { name } docs =
+            Dict.insert (home ++ "." ++ name) ( home, name ) docs
 
         addModule docs dict =
-            List.foldl (addUnion docs.name) dict docs.unions
+            List.foldl (addType docs.name) dict docs.unions
+                |> (\dict_ -> List.foldl (addType docs.name) dict_ docs.aliases)
 
         statusFn =
             case ( diffMode, maybeDiff ) of
