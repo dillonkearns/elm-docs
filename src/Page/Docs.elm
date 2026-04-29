@@ -163,30 +163,47 @@ getInfo latest model =
         version =
             Maybe.withDefault latest model.version
 
-        maybeInfo =
-            Maybe.map3 (\readme docs manifest -> ( readme, docs, manifest ))
-                (Session.getReadme model.session author project version)
-                (Session.getDocs model.session author project version)
-                (Session.getManifest model.session author project version)
-    in
-    case maybeInfo of
-        Nothing ->
-            ( model
-            , Cmd.batch
-                [ Session.fetchReadme (GotReadme version) author project version
-                , Session.fetchDocs (GotDocs version) author project version
-                , Session.fetchManifest (GotManifest version) author project version
-                ]
-            )
+        maybeDocs =
+            Session.getDocs model.session author project version
 
-        Just ( readme, docs, manifest ) ->
-            ( { model
-                | readme = Success readme
-                , docs = Success docs
-                , manifest = Success manifest
-              }
-            , scrollIfNeeded model.focus
-            )
+        maybeReadme =
+            Session.getReadme model.session author project version
+
+        maybeManifest =
+            Session.getManifest model.session author project version
+
+        maybeToSuccess maybe =
+            case maybe of
+                Just a ->
+                    Success a
+
+                Nothing ->
+                    Loading
+
+        fetchIfNeeded fetch maybe =
+            case maybe of
+                Just _ ->
+                    Cmd.none
+
+                Nothing ->
+                    fetch ()
+    in
+    ( { model
+        | readme = maybeToSuccess maybeReadme
+        , docs = maybeToSuccess maybeDocs
+        , manifest = maybeToSuccess maybeManifest
+      }
+    , Cmd.batch
+        [ case maybeDocs of
+            Nothing ->
+                Session.fetchDocs (GotDocs version) author project version
+
+            Just _ ->
+                scrollIfNeeded model.focus
+        , fetchIfNeeded (\() -> Session.fetchReadme (GotReadme version) author project version) maybeReadme
+        , fetchIfNeeded (\() -> Session.fetchManifest (GotManifest version) author project version) maybeManifest
+        ]
+    )
 
 
 scrollIfNeeded : Focus -> Cmd Msg
