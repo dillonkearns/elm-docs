@@ -163,30 +163,47 @@ getInfo latest model =
         version =
             Maybe.withDefault latest model.version
 
-        maybeInfo =
-            Maybe.map3 (\readme docs manifest -> ( readme, docs, manifest ))
-                (Session.getReadme model.session author project version)
-                (Session.getDocs model.session author project version)
-                (Session.getManifest model.session author project version)
-    in
-    case maybeInfo of
-        Nothing ->
-            ( model
-            , Cmd.batch
-                [ Session.fetchReadme (GotReadme version) author project version
-                , Session.fetchDocs (GotDocs version) author project version
-                , Session.fetchManifest (GotManifest version) author project version
-                ]
-            )
+        maybeDocs =
+            Session.getDocs model.session author project version
 
-        Just ( readme, docs, manifest ) ->
-            ( { model
-                | readme = Success readme
-                , docs = Success docs
-                , manifest = Success manifest
-              }
-            , scrollIfNeeded model.focus
-            )
+        maybeReadme =
+            Session.getReadme model.session author project version
+
+        maybeManifest =
+            Session.getManifest model.session author project version
+
+        maybeToSuccess maybe =
+            case maybe of
+                Just a ->
+                    Success a
+
+                Nothing ->
+                    Loading
+
+        fetchIfNeeded fetch maybe =
+            case maybe of
+                Just _ ->
+                    Cmd.none
+
+                Nothing ->
+                    fetch ()
+    in
+    ( { model
+        | readme = maybeToSuccess maybeReadme
+        , docs = maybeToSuccess maybeDocs
+        , manifest = maybeToSuccess maybeManifest
+      }
+    , Cmd.batch
+        [ case maybeDocs of
+            Nothing ->
+                Session.fetchDocs (GotDocs version) author project version
+
+            Just _ ->
+                scrollIfNeeded model.focus
+        , fetchIfNeeded (\() -> Session.fetchReadme (GotReadme version) author project version) maybeReadme
+        , fetchIfNeeded (\() -> Session.fetchManifest (GotManifest version) author project version) maybeManifest
+        ]
+    )
 
 
 scrollIfNeeded : Focus -> Cmd Msg
@@ -220,6 +237,7 @@ type Msg
     | GotReleases (Result Http.Error (OneOrMore Release.Release))
     | GotReadme Version (Result Http.Error String)
     | GotDocs Version (Result Http.Error Docs)
+    | GotDependenciesDocs String String Version (Result Http.Error Docs)
     | GotManifest Version (Result Http.Error Project)
     | GotRepoDocs (Result Http.Error Session.RepoDocsResponse)
     | GotCompareDocs (Result Http.Error Session.RepoDocsResponse)
@@ -302,6 +320,16 @@ update msg model =
                     , scrollIfNeeded model.focus
                     )
 
+        GotDependenciesDocs author project version result ->
+            case result of
+                Err _ ->
+                    ( model, Cmd.none )
+
+                Ok docs ->
+                    ( { model | session = Session.addDocs author project version docs model.session }
+                    , Cmd.none
+                    )
+
         GotManifest version result ->
             case result of
                 Err err ->
@@ -314,7 +342,11 @@ update msg model =
                         | manifest = Success manifest
                         , session = Session.addManifest model.author model.project version manifest model.session
                       }
-                    , Cmd.none
+                    , manifest
+                        |> manifestDependencies
+                        |> List.filter (\( author, project, pkgVersion ) -> Session.getDocs model.session author project pkgVersion == Nothing)
+                        |> List.map (\( author, project, pkgVersion ) -> Session.fetchDocs (GotDependenciesDocs author project pkgVersion) author project pkgVersion)
+                        |> Cmd.batch
                     )
 
         GotRepoDocs result ->
@@ -372,6 +404,49 @@ update msg model =
 
                 _ ->
                     ( model, Cmd.none )
+
+
+manifestDependencies : Project -> List ( String, String, Version )
+manifestDependencies manifest =
+    case manifest of
+        Project.Package { deps } ->
+            List.filterMap
+                (\( name, constraint ) ->
+                    Maybe.map2
+                        (\( author, project ) version -> ( author, project, version ))
+                        (parsePackageName name)
+                        (versionFromConstraint constraint)
+                )
+                deps
+
+        Project.Application { depsDirect } ->
+            List.filterMap
+                (\( name, version ) ->
+                    Maybe.map
+                        (\( author, project ) -> ( author, project, version ))
+                        (parsePackageName name)
+                )
+                depsDirect
+
+
+parsePackageName : Package.Name -> Maybe ( String, String )
+parsePackageName name =
+    case String.split "/" (Package.toString name) of
+        [ author, project ] ->
+            Just ( author, project )
+
+        _ ->
+            Nothing
+
+
+versionFromConstraint : Constraint -> Maybe Version
+versionFromConstraint constraint =
+    case String.split " " (Constraint.toString constraint) of
+        [] ->
+            Nothing
+
+        minVersion :: _ ->
+            Version.fromString minVersion
 
 
 
@@ -591,7 +666,7 @@ viewContent model =
                     lazy viewReadme model.readme
 
         Module name tag ->
-            viewModule model.author model.project model.version model.ref name model.docs model.diffData model.diffMode
+            viewModule model.author model.project model.version model.ref name model.docs model.manifest model.session model.diffData model.diffMode
 
 
 
@@ -618,15 +693,44 @@ viewReadme status =
 -- VIEW MODULE
 
 
-viewModule : String -> String -> Maybe Version -> Maybe String -> String -> Status Docs -> Maybe ApiDiff -> Bool -> Html msg
-viewModule author project version ref name status diffData diffMode =
+viewModule : String -> String -> Maybe Version -> Maybe String -> String -> Status Docs -> Status Project -> Session.Data -> Maybe ApiDiff -> Bool -> Html msg
+viewModule author project version ref name status manifestStatus session diffData diffMode =
     case status of
-        Success (Modules allDocs) ->
-            case findModule name allDocs of
+        Success (Modules allProjectDocs) ->
+            case findModule name allProjectDocs of
                 Just docs ->
                     let
                         header =
                             h1 [ class "block-list-title" ] [ text name ]
+
+                        allDocs =
+                            List.foldl
+                                (\( depAuthor, depProject, depVersion ) acc ->
+                                    case Session.getDocs session depAuthor depProject depVersion of
+                                        Just (Modules depDocs) ->
+                                            ( { author = depAuthor
+                                              , project = depProject
+                                              , version = Just depVersion
+                                              , ref = Nothing
+                                              }
+                                            , depDocs
+                                            )
+                                                :: acc
+
+                                        Just (Error _) ->
+                                            acc
+
+                                        Nothing ->
+                                            acc
+                                )
+                                [ ( { author = author, project = project, version = version, ref = ref }, allProjectDocs ) ]
+                                (case manifestStatus of
+                                    Success manifest ->
+                                        manifestDependencies manifest
+
+                                    _ ->
+                                        []
+                                )
 
                         info =
                             Block.makeInfo author project version ref name allDocs diffData diffMode
@@ -639,7 +743,7 @@ viewModule author project version ref name status diffData diffMode =
                 Nothing ->
                     div
                         (class "block-list" :: Problem.styles)
-                        (Problem.missingModule author project version name)
+                        (Problem.missingModule author project version)
 
         Success (Error error) ->
             lazy Utils.Error.view error
