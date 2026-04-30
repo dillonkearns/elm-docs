@@ -743,7 +743,7 @@ viewModule author project version ref name status manifestStatus session diffDat
                 Nothing ->
                     div
                         (class "block-list" :: Problem.styles)
-                        (Problem.missingModule author project version name)
+                        (Problem.missingModule author project version)
 
         Success (Error error) ->
             lazy Utils.Error.view error

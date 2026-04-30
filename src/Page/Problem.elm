@@ -52,8 +52,8 @@ offline file =
 
 
 {-| -}
-missingModule : String -> String -> Maybe V.Version -> String -> List (Html msg)
-missingModule author project version name =
+missingModule : String -> String -> Maybe V.Version -> List (Html msg)
+missingModule author project version =
     [ div [ style "font-size" "3em" ]
         [ text "Module not found"
         ]
